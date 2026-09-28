@@ -2,6 +2,16 @@ import type { Locator, Page } from "playwright-core";
 import type { ChatGptWebAccountCapabilities } from "./chatgpt-web-models";
 
 export const CHATGPT_NEW_CHAT_URL = "https://chatgpt.com/";
+
+export function chatGptSavedConversationUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    const match = /^\/c\/([a-zA-Z0-9_-]{8,128})\/?$/.exec(parsed.pathname);
+    if (parsed.origin !== "https://chatgpt.com" || !match || parsed.username || parsed.password
+      || parsed.search) return undefined;
+    return `https://chatgpt.com/c/${match[1]}`;
+  } catch { return undefined; }
+}
 export const CHATGPT_COMPOSER_SELECTOR = [
   '[data-testid="prompt-textarea"]',
   "#prompt-textarea",
