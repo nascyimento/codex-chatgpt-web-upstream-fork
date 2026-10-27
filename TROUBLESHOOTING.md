@@ -137,6 +137,14 @@ reuse the single-home permission cache. A secondary home's custom SQLite locatio
 that home's `config.toml` as `sqlite_home`; the bridge's `CODEX_SQLITE_HOME` applies only to its
 primary home. DEV commands keep their isolated home and discard this production setting.
 
+## A WSL task fails with `missing cwd in trusted Codex environment context`
+
+A Windows bridge cannot read task records from a Codex home inside WSL. When a resumed task sends an
+environment update without `<cwd>` (for example after midnight), the bridge finds no native record
+and rejects every later turn. To reuse the cwd the bridge already verified for that thread, set
+`CODEX_CHATGPT_WEB_CACHED_CWD_FALLBACK=1` in the environment that starts the bridge or launcher.
+It applies only to threads cached with `danger-full-access` and only in single-home mode.
+
 ## Native models stop after closing the launcher
 
 While the integration is installed, native Codex models also use the local bridge. Keep the launcher

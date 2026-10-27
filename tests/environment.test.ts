@@ -1257,6 +1257,24 @@ describe("trusted Codex task environment continuity", () => {
     expect(() => store.resolve(request)).toThrow("missing cwd");
   });
 
+  test.each([
+    ["danger-full-access", undefined],
+    ["workspace-write", "missing cwd"],
+  ] as const)("opt-in cached cwd fallback reuses a verified %s thread when its rollout is unreadable", (mode, failure) => {
+    const { codexHome, request, rolloutPath } = cwdlessRolloutFixture(mode);
+    const store = new ChatGptThreadEnvironmentStore(undefined, Date.now, codexHome);
+    expect(store.resolve(request).cwd).toBe(root);
+    rmSync(rolloutPath);
+    expect(() => store.resolve(request)).toThrow("missing cwd");
+    process.env.CODEX_CHATGPT_WEB_CACHED_CWD_FALLBACK = "1";
+    try {
+      if (failure) expect(() => store.resolve(request)).toThrow(failure);
+      else expect(store.resolve(request).cwd).toBe(root);
+    } finally {
+      delete process.env.CODEX_CHATGPT_WEB_CACHED_CWD_FALLBACK;
+    }
+  });
+
   test("cwd-less updates still reject conflicting explicit cwd, permissions and roots (#894)", () => {
     const { codexHome, request, environment } = cwdlessRolloutFixture();
     const store = new ChatGptThreadEnvironmentStore(undefined, Date.now, codexHome);

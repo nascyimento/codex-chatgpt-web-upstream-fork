@@ -286,8 +286,15 @@ export class ChatGptThreadEnvironmentStore {
       }
       // Only a current native rollout can supersede an unrecognized historical envelope. Without
       // that proof, do not turn arbitrary history or an invalid update into cached authority.
-      if (hasRawChatGptEnvironmentContext(parsed)) throw error;
       const sameThread = this.get(identity.threadId);
+      // Opt-in: a Windows bridge cannot read a WSL Codex home, so a resumed task's cwd-less delta
+      // never finds its rollout. Reuse the cwd this thread already verified with full access.
+      const cachedCwdFallback = process.env.CODEX_CHATGPT_WEB_CACHED_CWD_FALLBACK === "1"
+        && error.message.includes("missing cwd") && sameThread?.sandboxPolicy.type === "dangerFullAccess";
+      if (cachedCwdFallback) console.warn("[chatgpt-web] trusted_environment_recovery cached_cwd_fallback");
+      if (hasRawChatGptEnvironmentContext(parsed) && !cachedCwdFallback) {
+        throw error;
+      }
       if (sameThread) return {
         cwd: sameThread.cwd,
         roots: sameThread.roots,
