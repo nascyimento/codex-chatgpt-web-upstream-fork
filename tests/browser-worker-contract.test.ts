@@ -3351,14 +3351,17 @@ test("GPT-6 staged input enforces its measured account and effort ceiling before
       222_386, 40_000, "gpt-5.6-sol", effort, pro, 200_000, 2, undefined, "6",
     )).toThrow("222,386-token two-part ceiling");
     expect(() => assertChatGptWebMultipartInputWithinLimits(
-      119_999, 40_000, "gpt-5.6-sol", effort, { ...pro, proAvailable: false }, 200_000, 6, undefined, "6",
+      259_999, 40_000, "gpt-5.6-sol", effort, { ...pro, proAvailable: false }, 200_000, 6, undefined, "6",
     )).not.toThrow();
     expect(() => assertChatGptWebMultipartInputWithinLimits(
-      120_000, 40_000, "gpt-5.6-sol", effort, { ...pro, proAvailable: false }, 200_000, 6, undefined, "6",
-    )).toThrow("120,000-token six-part ceiling");
+      260_000, 40_000, "gpt-5.6-sol", effort, { ...pro, proAvailable: false }, 200_000, 6, undefined, "6",
+    )).toThrow("260,000-token six-part ceiling");
     expect(() => assertChatGptWebMultipartInputWithinLimits(
-      120_000, 40_000, "gpt-5.6-sol", effort, { ...pro, proAvailable: false }, 200_000, 2, undefined, "6",
-    )).toThrow("120,000-token two-part ceiling");
+      179_999, 40_000, "gpt-5.6-sol", effort, { ...pro, proAvailable: false }, 200_000, 2, undefined, "6",
+    )).not.toThrow();
+    expect(() => assertChatGptWebMultipartInputWithinLimits(
+      180_000, 40_000, "gpt-5.6-sol", effort, { ...pro, proAvailable: false }, 200_000, 2, undefined, "6",
+    )).toThrow("180,000-token two-part ceiling");
   }
   expect(() => assertChatGptWebMultipartInputWithinLimits(
     100_000, 40_000, "gpt-5.6-sol", "low", pro, 200_000, 6, undefined, "6",
