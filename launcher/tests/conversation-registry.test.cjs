@@ -30,7 +30,8 @@ test("conversation registry persists the exact account and conversation after re
   assert.equal(new ConversationRegistry(file).get(first).status, "pending");
   assert.equal(registry.bind(first, savedUrl, account, "initial_turn").status, "bound");
   assert.deepEqual(new ConversationRegistry(file).get(first), registry.get(first));
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  // Windows exposes ACLs rather than POSIX permission bits through stat.mode.
+  if (process.platform !== "win32") assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(registry.bind(first, savedUrl, account).url, savedUrl);
   assert.throws(() => registry.bind(first, "https://chatgpt.com/c/different-chat", account), /conflicts/);
   assert.throws(() => registry.bind(first, savedUrl, second), /conflicts/);
