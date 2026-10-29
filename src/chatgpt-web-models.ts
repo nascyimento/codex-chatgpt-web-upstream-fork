@@ -103,8 +103,8 @@ export const CHATGPT_WEB_GPT6_SOL_BIGGER_AUTO_COMPACT_TOKEN_LIMIT = 220_000;
 // Rechecked 2026-10-10 on Plus: Medium and High recovered all 12 distributed
 // codes at 127k estimated input tokens. At 144k both lost the entire first part.
 // Keep headroom below the passing result, with compaction before the ceiling.
-export const CHATGPT_WEB_GPT6_PLUS_BIGGER_CONTEXT_WINDOW = 120_000;
-export const CHATGPT_WEB_GPT6_PLUS_BIGGER_AUTO_COMPACT_TOKEN_LIMIT = 110_000;
+export const CHATGPT_WEB_GPT6_PLUS_BIGGER_CONTEXT_WINDOW = 260_000;
+export const CHATGPT_WEB_GPT6_PLUS_BIGGER_AUTO_COMPACT_TOKEN_LIMIT = 220_000;
 
 export interface ChatGptWebContextLimits {
   contextWindow: number;

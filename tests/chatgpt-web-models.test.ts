@@ -213,7 +213,7 @@ describe("fixed ChatGPT Web model routes", () => {
       expect(resolveChatGptWebContextLimits(CHATGPT_WEB_BACKEND_MODEL, effort, plus, "6"))
         .toMatchObject({ contextWindow: 90_000, autoCompactTokenLimit: 80_000 });
       expect(resolveChatGptWebContextLimits(CHATGPT_WEB_BACKEND_MODEL, effort, enabled, "6"))
-        .toMatchObject({ contextWindow: 120_000, autoCompactTokenLimit: 110_000 });
+        .toMatchObject({ contextWindow: 260_000, autoCompactTokenLimit: 220_000 });
       expect(resolveChatGptWebTransportLimits(CHATGPT_WEB_BACKEND_MODEL, effort, enabled))
         .toEqual(resolveChatGptWebTransportLimits(CHATGPT_WEB_BACKEND_MODEL, effort, plus));
     }
@@ -223,7 +223,7 @@ describe("fixed ChatGPT Web model routes", () => {
       .toThrow("unavailable effort");
     expect(resolveChatGptWebContextLimits(CHATGPT_WEB_BACKEND_MODEL, "xhigh", {
       ...enabled, extraHighAvailable: true,
-    }, "6")).toMatchObject({ contextWindow: 120_000, autoCompactTokenLimit: 110_000 });
+    }, "6")).toMatchObject({ contextWindow: 260_000, autoCompactTokenLimit: 220_000 });
   });
 
   test("publishes Luna's real model window without early native compaction", () => {
