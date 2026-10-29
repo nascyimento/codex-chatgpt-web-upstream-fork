@@ -125,8 +125,8 @@ describe("native /models augmentation", () => {
         for (const family of ["6", "6.2"] as const) {
           const six = models.find(model => model.slug === `chatgpt-web/gpt-${family}-${suffix}`)!;
           const expanded = suffix === "sol";
-          const expandedWindow = proAvailable ? 240_000 : 120_000;
-          const expandedCompact = proAvailable ? 220_000 : 110_000;
+          const expandedWindow = proAvailable ? 240_000 : 260_000;
+          const expandedCompact = proAvailable ? 220_000 : 220_000;
           expect(six).toMatchObject({ context_window: expanded ? expandedWindow : window,
             max_context_window: expanded ? expandedWindow : window, auto_compact_token_limit: expanded ? expandedCompact : compact });
           expect(six.description).toContain(expanded ? "Plus and Pro" : "standard context");
