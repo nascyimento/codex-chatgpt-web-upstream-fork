@@ -93,8 +93,8 @@ test.each(["string", "text parts"] as const)("#930: GPT-6 Pro compaction recover
 
 test.each([
   { family: "6", pro: true, effort: "xhigh", parts: 2, count: 12, words: 20_000, ceiling: 222_386 },
-  { family: "6", pro: false, effort: "high", parts: 2, count: 7, words: 20_000, ceiling: 120_000 },
-  { family: "6", pro: false, effort: "high", parts: 6, count: 7, words: 20_000, ceiling: 120_000 },
+  { family: "6", pro: false, effort: "high", parts: 2, count: 14, words: 20_000, ceiling: 260_000 },
+  { family: "6", pro: false, effort: "high", parts: 6, count: 14, words: 20_000, ceiling: 260_000 },
   { family: "5.6", pro: false, effort: "high", parts: 6, count: 14, words: 20_000, ceiling: 270_000 },
   { family: "5.6", pro: true, effort: "high", parts: 6, count: 17, words: 20_000, ceiling: 333_579 },
   { family: "6", pro: true, effort: "max", parts: 6, count: 17, words: 20_000, ceiling: 336_579 },
