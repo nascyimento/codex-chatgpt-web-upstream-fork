@@ -55,7 +55,6 @@ test("pending sends block replay after a restart without a verified URL", async 
   const fixture = Object.assign(Object.create(BrowserHost.prototype), {
     manualOperation: null, userCancelledTurnOwners: new Map(), turnTabs: new Map(),
     conversationRegistry: recovered,
-    getUseSavedChats: () => true,
     logger: { info() {} }, publishState() {}, snapshot: () => ({}),
     syncViewVisibility() {}, writeDescriptor() {},
     createTurnTab: async () => ({ id: "should-not-create", surfaceId: "should-not-create" }),
@@ -72,7 +71,6 @@ test("a required retained turn can reopen the exact saved URL and isolates concu
   const fixture = Object.assign(Object.create(BrowserHost.prototype), {
     manualOperation: null, userCancelledTurnOwners: new Map(), turnTabs: new Map(),
     conversationRegistry: new ConversationRegistry(file),
-    getUseSavedChats: () => true,
     logger: { info() {} }, publishState() {}, snapshot: () => ({}),
     syncViewVisibility() {}, writeDescriptor() {},
     createTurnTab: async () => { fixture.turnTabs.set(tab.id, tab); return tab; },
@@ -95,7 +93,6 @@ test("an uncertain continuation blocks replay until the original send is reconci
   const fixture = Object.assign(Object.create(BrowserHost.prototype), {
     manualOperation: null, userCancelledTurnOwners: new Map(), turnTabs: new Map(),
     conversationRegistry: recovered, logger: { info() {} }, publishState() {},
-    getUseSavedChats: () => true,
     snapshot: () => ({}), syncViewVisibility() {}, writeDescriptor() {},
     createTurnTab: async () => { throw new Error("No new chat is permitted"); },
   });
@@ -119,7 +116,7 @@ test("an existing running browser owner cannot silently lease the same saved tur
   const fixture = Object.assign(Object.create(BrowserHost.prototype), {
     manualOperation: null, userCancelledTurnOwners: new Map(),
     turnTabs: new Map([[existing.id, existing]]),
-    conversationRegistry: registry, getUseSavedChats: () => true,
+    conversationRegistry: registry,
     logger: { info() {} }, publishState() {}, snapshot: () => ({}),
     syncViewVisibility() {}, writeDescriptor() {},
     createTurnTab: async () => { throw new Error("A duplicate must not allocate a browser"); },
@@ -128,19 +125,19 @@ test("an existing running browser owner cannot silently lease the same saved tur
   assert.equal(fixture.turnTabs.size, 1);
 }));
 
-test("Temporary Chat mode does not look up or write saved conversation mappings", async () => withRegistry(async file => {
+test("a turn without a retained conversation key does not look up or write saved mappings", async () => withRegistry(async file => {
   const registry = new ConversationRegistry(file);
   registry.arm(first, "initial_turn");
   registry.bind(first, savedUrl, account, "initial_turn");
   const before = fs.readFileSync(file, "utf8");
   const fixture = Object.assign(Object.create(BrowserHost.prototype), {
     manualOperation: null, userCancelledTurnOwners: new Map(), turnTabs: new Map(),
-    conversationRegistry: registry, getUseSavedChats: () => false,
+    conversationRegistry: registry,
     logger: { info() {} }, publishState() {}, snapshot: () => ({}),
     syncViewVisibility() {}, writeDescriptor() {},
     createTurnTab: async () => ({ id: "temporary-tab", surfaceId: "x".repeat(32) }),
   });
-  const lease = await fixture.beginTurn("temporary_turn", false, 10, first, "Codex Native2");
+  const lease = await fixture.beginTurn("fresh_turn", false, 10, undefined, "Codex Native2");
   assert.equal(lease.reused, false);
   assert.equal(lease.recoveredUrl, undefined);
   assert.equal(fs.readFileSync(file, "utf8"), before);

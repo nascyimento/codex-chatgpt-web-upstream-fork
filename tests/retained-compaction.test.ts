@@ -1376,7 +1376,6 @@ test("a missing retained checkpoint keeps the exact conversation available for a
       brokerSocketPath: defaultBrokerEndpoint(root),
       appName: "Codex Native DEV",
       localToolsEnabled: true,
-      useSavedChats: true,
       solAvailable: true,
       extraHighAvailable: true, proAvailable: true,
     },
@@ -1553,7 +1552,7 @@ test("a compact HTTP observer can reconnect without sending a second retained-ch
   }
 });
 
-test.each([false, true])("structured compact rebuilds canonical context when its retained source is absent (Bigger Context=%s)", async experimentalBiggerContext => {
+test.each([false, true])("non-retained compact rebuilds canonical context when its source is absent (Bigger Context=%s)", async experimentalBiggerContext => {
   const root = mkdtempSync(join(shortSocketTempRoot(), "cgw-missing-retained-compact-"));
   const provider: CodexProviderConfig = {
     adapter: "chatgpt-web",
@@ -1566,6 +1565,7 @@ test.each([false, true])("structured compact rebuilds canonical context when its
       localToolsEnabled: true,
       solAvailable: true,
       extraHighAvailable: true, proAvailable: true,
+      experimentalFreshConversationPerTurn: true,
     },
   };
   const worker = ChatGptBrowserWorker.forProvider(provider);
@@ -1661,7 +1661,7 @@ test.each([false, true])("configured fresh compaction waits for cleanup and pres
   }
 });
 
-test.each([false, true])("fresh multipart compaction preserves phase budgets with fresh mode=%s", async freshConversation => {
+test("fresh multipart compaction preserves phase budgets", async () => {
   const root = mkdtempSync(join(shortSocketTempRoot(), "cgw-phased-fallback-compact-"));
   const provider: CodexProviderConfig = {
     adapter: "chatgpt-web",
@@ -1674,13 +1674,13 @@ test.each([false, true])("fresh multipart compaction preserves phase budgets wit
       solAvailable: true,
       extraHighAvailable: true, proAvailable: true,
       turnTimeoutMs: 40,
-      experimentalFreshConversationPerTurn: freshConversation,
+      experimentalFreshConversationPerTurn: true,
     },
   };
   const worker = ChatGptBrowserWorker.forProvider(provider);
   const originalRun = worker.run.bind(worker);
   (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = async turn => {
-    expect(turn.traceId.endsWith(freshConversation ? "_fresh" : "_fallback")).toBeTrue();
+    expect(turn.traceId.endsWith("_fresh")).toBeTrue();
     expect(turn.onMultipartStageAcknowledged).toBeDefined();
     expect(turn.onSubmitted).toBeDefined();
     for (let part = 1; part <= 5; part++) {
@@ -1695,12 +1695,13 @@ test.each([false, true])("fresh multipart compaction preserves phase budgets wit
     expect(turn.abortSignal?.aborted).toBeFalse();
     return "Fallback checkpoint after separately bounded phases";
   };
+  const compact = request(true);
   const events: AdapterEvent[] = [];
   mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const clockNow = spyOn(performance, "now").mockImplementation(() => Date.now());
   try {
     await createChatGptWebAdapter(provider).runTurn!(
-      request(true),
+      compact,
       { headers: new Headers() },
       event => events.push(event),
     );
@@ -1722,9 +1723,11 @@ test("compaction survives process suspension but still expires after awake inact
     const provider: CodexProviderConfig = {
       adapter: "chatgpt-web", baseUrl: `browser://compaction-suspension-${root}`,
       chatgptWeb: {
-        browserHost: "launcher", browserHostDescriptorPath: join(root, "launcher.json"),
+        browserHost: "launcher",
+        browserHostDescriptorPath: join(root, "launcher.json"),
         brokerSocketPath: defaultBrokerEndpoint(root), localToolsEnabled: true,
         solAvailable: true, extraHighAvailable: true, proAvailable: true,
+        experimentalFreshConversationPerTurn: true,
       },
     };
     const worker = ChatGptBrowserWorker.forProvider(provider);
@@ -1797,6 +1800,7 @@ test("cancel-all waits for physical settlement of a fresh compaction fallback", 
       localToolsEnabled: true,
       solAvailable: true,
       extraHighAvailable: true, proAvailable: true,
+      experimentalFreshConversationPerTurn: true,
     },
   };
   const worker = ChatGptBrowserWorker.forProvider(provider);
@@ -1852,6 +1856,7 @@ test("a timed-out fresh compaction retains its owner until helper cleanup comple
       solAvailable: true,
       extraHighAvailable: true, proAvailable: true,
       turnTimeoutMs: 40,
+      experimentalFreshConversationPerTurn: true,
     },
   };
   const worker = ChatGptBrowserWorker.forProvider(provider);
@@ -1927,7 +1932,7 @@ test("a timed-out fresh compaction retains its owner until helper cleanup comple
   }
 });
 
-test.each([false, true])("structured compact rebuild after retained browser loss preserves rate limit=%s", async rateLimited => {
+test("compaction fails closed after retained browser loss instead of opening a replacement chat", async () => {
   const root = mkdtempSync(join(shortSocketTempRoot(), "cgw-stale-retained-compact-"));
   const provider: CodexProviderConfig = {
     adapter: "chatgpt-web",
@@ -1961,14 +1966,8 @@ test.each([false, true])("structured compact rebuild after retained browser loss
   let browserStarts = 0;
   (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = async turn => {
     browserStarts += 1;
-    if (turn.requireRetainedConversation) throw chatGptRetainedConversationUnavailableError();
-    const prepared = await turn.prepare();
-    expect(prepared.text).toContain("Original task");
-    prepared.release();
-    if (rateLimited) throw new ChatGptWebAdapterError("ChatGPT rate limit: too many requests.", {
-      status: 429, errorType: "rate_limit_error", code: "rate_limit_exceeded", retryable: false,
-    });
-    return "Fallback checkpoint after retained browser loss";
+    expect(turn.requireRetainedConversation).toBeTrue();
+    throw chatGptRetainedConversationUnavailableError();
   };
   const events: AdapterEvent[] = [];
   try {
@@ -1977,18 +1976,11 @@ test.each([false, true])("structured compact rebuild after retained browser loss
       { headers: new Headers() },
       event => events.push(event),
     );
-    expect(browserStarts).toBe(2);
-    if (rateLimited) {
-      expect(events.at(-1)).toMatchObject({
-        type: "error", status: 429, errorType: "rate_limit_error", code: "rate_limit_exceeded",
-        retryable: false, message: "ChatGPT rate limit: too many requests.",
-      });
-      expect(events.some(event => event.type === "done")).toBeFalse();
-      return;
-    }
-    expect(events.some(event => event.type === "text_delta"
-      && event.text.includes("Fallback checkpoint after retained browser loss"))).toBeTrue();
-    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "stop", endTurn: true });
+    expect(browserStarts).toBe(1);
+    expect(events.at(-1)).toMatchObject({
+      type: "error", code: "compaction_source_unavailable", retryable: false,
+    });
+    expect(events.some(event => event.type === "done")).toBeFalse();
   } finally {
     (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
     chatGptTurnSessions.clear();
@@ -2007,7 +1999,6 @@ test("saved retained compaction reopens the exact persisted conversation after i
       browserHostDescriptorPath: join(root, "launcher.json"),
       brokerSocketPath: defaultBrokerEndpoint(root),
       localToolsEnabled: true,
-      useSavedChats: true,
       solAvailable: true,
       extraHighAvailable: true, proAvailable: true,
     },
@@ -2062,7 +2053,6 @@ test("saved retained compaction still fails closed when the persisted conversati
       browserHostDescriptorPath: join(root, "launcher.json"),
       brokerSocketPath: defaultBrokerEndpoint(root),
       localToolsEnabled: true,
-      useSavedChats: true,
       solAvailable: true,
       extraHighAvailable: true, proAvailable: true,
     },
@@ -2093,7 +2083,7 @@ test("saved retained compaction still fails closed when the persisted conversati
   }
 });
 
-test("a disappeared retained source cannot leave its fresh compaction rebuild past the shared deadline", async () => {
+test("a disappeared retained source fails closed without starting a fresh compaction", async () => {
   const root = mkdtempSync(join(shortSocketTempRoot(), "cgw-stale-retained-deadline-"));
   const provider: CodexProviderConfig = {
     adapter: "chatgpt-web",
@@ -2126,33 +2116,24 @@ test("a disappeared retained source cannot leave its fresh compaction rebuild pa
   await chatGptTurnSessions.find(sourceKey)!.browserOutcome;
 
   let browserStarts = 0;
-  let releaseBrowser: (() => void) | undefined;
-  let fallbackTrace = "";
   (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = async turn => {
     browserStarts += 1;
-    if (turn.requireRetainedConversation) throw chatGptRetainedConversationUnavailableError();
-    fallbackTrace = turn.traceId;
-    return new Promise<string>(resolve => { releaseBrowser = () => resolve("browser cleanup completed"); });
+    expect(turn.requireRetainedConversation).toBeTrue();
+    throw chatGptRetainedConversationUnavailableError();
   };
   const events: AdapterEvent[] = [];
-  const startedAt = performance.now();
   try {
     await createChatGptWebAdapter(provider).runTurn!(
       request(true),
       { headers: new Headers() },
       event => events.push(event),
     );
-    expect(performance.now() - startedAt).toBeLessThan(1_000);
-    expect(browserStarts).toBe(2);
+    expect(browserStarts).toBe(1);
     expect(events.at(-1)).toMatchObject({
-      type: "error",
-      code: "compaction_handoff_timeout",
+      type: "error", code: "compaction_source_unavailable",
       retryable: false,
-      message: "ChatGPT compaction had no observed activity for 25ms",
     });
   } finally {
-    releaseBrowser?.();
-    await cancelStructuredCompactionTrace(fallbackTrace, new Error("test cleanup"));
     (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
     chatGptTurnSessions.clear();
     await TurnBroker.forSocket(provider.chatgptWeb!.brokerSocketPath!).close();

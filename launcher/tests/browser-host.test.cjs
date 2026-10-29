@@ -2183,7 +2183,6 @@ test("connector verification records the helper failure in launcher diagnostics"
     },
     setState: (patch) => calls.push(["state", patch]),
     refreshChatGptHomeDocument: async () => calls.push(["refresh"]),
-    getUseSavedChats: () => true,
     verifyConnectorWithBrowserHelper: async () => { throw failure; },
   };
 

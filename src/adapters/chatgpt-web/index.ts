@@ -1023,10 +1023,16 @@ export function createChatGptWebAdapter(
                   armHandoffDeadline();
                   const operationSignal = AbortSignal.any([operatorSignal, handoffDeadline.signal]);
                   const sourceConversationKey = chatGptConversationKey(parsed, executionNamespace);
+                  const retainedConversationEnabled = Boolean(
+                    sourceConversationKey
+                    && retainedLauncherDescriptor
+                    && provider.chatgptWeb?.localToolsEnabled === true
+                    && !freshConversationPerTurn
+                    && !manualRequest,
+                  );
                   const runFreshCompaction = async (reason: string): Promise<string> => {
                     handoffPhase = "fresh_compaction";
-                    if (provider.chatgptWeb?.useSavedChats === true
-                      && !freshConversationPerTurn && !manualRequest) {
+                    if (retainedConversationEnabled) {
                       throw new ChatGptWebAdapterError(
                         "The original saved ChatGPT conversation could not be used for this Codex compaction. Resume the original turn before compacting; a replacement chat will not be created.",
                         { status: 409, errorType: "invalid_request_error",
@@ -1098,14 +1104,13 @@ export function createChatGptWebAdapter(
                       // remains fail-closed here: `requireRetainedConversation` only leases a new
                       // tab when this conversationKey still has a verified bound mapping, and it
                       // rejects missing/pending/ambiguous mappings without creating another chat.
-                      if (provider.chatgptWeb?.useSavedChats === true
-                        && !freshConversationPerTurn && !manualRequest && sourceConversationKey) {
+                      if (retainedConversationEnabled) {
                         handoffPhase = "recovered_saved_checkpoint";
                         armHandoffDeadline();
                         const rawSummary = await requestRetainedCompactionHandoff(
                           worker,
                           parsed,
-                          sourceConversationKey,
+                          sourceConversationKey!,
                           structuredBroker!,
                           configuredCapabilities,
                           handoffTraceId,
@@ -1117,8 +1122,7 @@ export function createChatGptWebAdapter(
                       // An old Launcher tab can outlive an in-memory source after a daemon
                       // restart. A fresh checkpoint must not leave that tab masquerading as
                       // the exact transcript that produced the new compacted context.
-                      if (!(provider.chatgptWeb?.useSavedChats === true
-                          && !freshConversationPerTurn && !manualRequest)
+                      if (!retainedConversationEnabled
                         && sourceConversationKey && retainedLauncherDescriptor
                         && existsSync(retainedLauncherDescriptor)) {
                         await releaseLauncherRetainedConversation(retainedLauncherDescriptor, sourceConversationKey);
@@ -1220,7 +1224,8 @@ export function createChatGptWebAdapter(
                     // Keep both the logical source and its retained browser binding until a later
                     // checkpoint succeeds (or an explicit cancellation/source failure retires it).
                     if (handoffError instanceof ChatGptWebAdapterError
-                      && handoffError.code === "compaction_handoff_missing") {
+                      && (handoffError.code === "compaction_handoff_missing"
+                        || (retainedConversationEnabled && handoffError.code === "compaction_source_unavailable"))) {
                       throw handoffError;
                     }
                     try {
@@ -1241,6 +1246,7 @@ export function createChatGptWebAdapter(
                     }
                     if (handoffError instanceof ChatGptWebAdapterError
                       && handoffError.code === "compaction_source_unavailable") {
+                      if (retainedConversationEnabled) throw handoffError;
                       return await runFreshCompaction("source_disappeared_before_handoff");
                     }
                     throw handoffError;

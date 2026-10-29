@@ -160,7 +160,7 @@ export const CHATGPT_COMPLETION_ACTION_GRACE_MS = 10 * 60_000;
  */
 export const CHATGPT_EXTERNAL_PROGRESS_RECENT_GRACE_MS = Math.max(
   CHATGPT_RESPONSE_DOM_GRACE_MS,
-  DEFAULT_STALL_TIMEOUT_SEC * 1_000 - CHATGPT_COMPLETION_ACTION_GRACE_MS,
+  DEFAULT_STALL_TIMEOUT_SEC * 1_000 - CHATGPT_RESPONSE_DOM_GRACE_MS,
 );
 export const CHATGPT_COMPLETION_SETTLE_MS = 2_000;
 export const CHATGPT_TOOL_CONFIRMATION_TIMEOUT_MS = 60_000;
@@ -5155,7 +5155,7 @@ export class ChatGptBrowserWorker {
         await this.runStage(
           turn.traceId,
           "saved_conversation_recovery",
-          browserStageTimeouts.temporaryChatPreparation,
+          browserStageTimeouts.newChatPreparation,
           () => this.prepareExistingChatSurface(
             page,
             retained.recoveredUrl!,
@@ -5182,7 +5182,7 @@ export class ChatGptBrowserWorker {
       // A retained lease proves conversation ownership. Model selection and plugin attachment
       // must still be established for each new submission on that page.
       let verifiedAccountKey: string | undefined;
-      if (turn.conversationKey && launcherSurfaceId && this.config.useSavedChats) {
+      if (turn.conversationKey && launcherSurfaceId) {
         verifiedAccountKey = (await readChatGptUsageAccount(page)).accountKey;
         if (retained?.accountKey && verifiedAccountKey !== retained.accountKey) {
           throw new Error("The authenticated ChatGPT account differs from the account that owns this Codex conversation");
@@ -5193,14 +5193,14 @@ export class ChatGptBrowserWorker {
         }
       }
       const armFirstSend = async () => {
-        if (!turn.conversationKey || !launcherSurfaceId || !this.config.useSavedChats
+        if (!turn.conversationKey || !launcherSurfaceId
           || (reuseConversation && !retained?.accountKey)) return;
         await notifyLauncherTurn(this.config.browserHostDescriptorPath!, {
           phase: "arm", traceId: turn.traceId, helperPid: process.pid,
         });
       };
       const bindFirstSend = async () => {
-        if (!turn.conversationKey || !launcherSurfaceId || !this.config.useSavedChats) return;
+        if (!turn.conversationKey || !launcherSurfaceId) return;
         if (reuseConversation) {
           if (retained?.accountKey) {
             await notifyLauncherTurn(this.config.browserHostDescriptorPath!, {
