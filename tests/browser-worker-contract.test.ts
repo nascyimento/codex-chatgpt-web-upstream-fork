@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createContext, runInContext } from "node:vm";
 import type { Page } from "playwright-core";
-import { CHATGPT_BROWSER_OBSERVATION_PROBE_TIMEOUT_MS, CHATGPT_COMPLETION_SETTLE_MS, CHATGPT_EXTERNAL_PROGRESS_CLOCK_SKEW_MS, CHATGPT_EXTERNAL_PROGRESS_STALL_CEILING_MS, ChatGptCompletionTracker, chatGptExternalProgressSuppressesDomHealth, CHATGPT_RESPONSE_DOM_GRACE_MS, MAX_CHATGPT_INTERNAL_OBSERVATION_FAULTS, CHATGPT_COMPOSER_DOCUMENT_END_KEY, CHATGPT_COMPOSER_SELECT_ALL_KEY, ChatGptBrowserObservationTimeoutError, ChatGptBrowserWorker, ChatGptSubmissionRejectionObserver, ChatGptPromptAttachmentIntegrityError, ChatGptTurnDomHealthTracker, ChatGptVisibleTraceTracker, MAX_CHATGPT_BROWSER_PAGE_REBINDS, MAX_CHATGPT_BROWSER_TABS, MAX_CHATGPT_CONNECTOR_TRIGGER_ATTEMPTS, assertChatGptWebInputWithinLimits, assertChatGptWebMultipartInputWithinLimits, browserDiagnosticCheckpoint, chatGptNewTurnIdentity, chatGptReboundTurnIdentity, chatGptSubmissionEvidence, connectAfterClosingBrowserConnection, isChatGptTraceControl, redactChatGptUiDiagnostic, resolveBrowserConfig, resolveChatGptToolConfirmation, resolveChatGptWebMultipartStagingMode, sanitizeChatGptBrowserDiagnosticState, setChatGptThinkMode, stripChatGptTraceControlSuffix, throwIfChatGptRateLimitDialog, throwIfChatGptSessionFailureAlert, throwIfChatGptTerminalErrorAlert, withChatGptBrowserObservationTimeout, CHATGPT_MULTIPART_RESPONSE_DOM_GRACE_MS, browserStageTimeouts, ChatGptSuspensionClock, remainingStageBudgetMs } from "../src/adapters/chatgpt-web/browser-worker";
+import { CHATGPT_BROWSER_OBSERVATION_PROBE_TIMEOUT_MS, CHATGPT_COMPLETION_SETTLE_MS, CHATGPT_EXTERNAL_PROGRESS_CLOCK_SKEW_MS, CHATGPT_EXTERNAL_PROGRESS_RECENT_GRACE_MS, CHATGPT_EXTERNAL_PROGRESS_STALL_CEILING_MS, ChatGptCompletionTracker, chatGptExternalProgressSuppressesDomHealth, CHATGPT_RESPONSE_DOM_GRACE_MS, MAX_CHATGPT_INTERNAL_OBSERVATION_FAULTS, CHATGPT_COMPOSER_DOCUMENT_END_KEY, CHATGPT_COMPOSER_SELECT_ALL_KEY, ChatGptBrowserObservationTimeoutError, ChatGptBrowserWorker, ChatGptSubmissionRejectionObserver, ChatGptPromptAttachmentIntegrityError, ChatGptTurnDomHealthTracker, ChatGptVisibleTraceTracker, MAX_CHATGPT_BROWSER_PAGE_REBINDS, MAX_CHATGPT_BROWSER_TABS, MAX_CHATGPT_CONNECTOR_TRIGGER_ATTEMPTS, assertChatGptWebInputWithinLimits, assertChatGptWebMultipartInputWithinLimits, browserDiagnosticCheckpoint, chatGptNewTurnIdentity, chatGptReboundTurnIdentity, chatGptSubmissionEvidence, connectAfterClosingBrowserConnection, isChatGptTraceControl, redactChatGptUiDiagnostic, resolveBrowserConfig, resolveChatGptToolConfirmation, resolveChatGptWebMultipartStagingMode, sanitizeChatGptBrowserDiagnosticState, setChatGptThinkMode, stripChatGptTraceControlSuffix, throwIfChatGptRateLimitDialog, throwIfChatGptSessionFailureAlert, throwIfChatGptTerminalErrorAlert, withChatGptBrowserObservationTimeout, CHATGPT_MULTIPART_RESPONSE_DOM_GRACE_MS, browserStageTimeouts, ChatGptSuspensionClock, remainingStageBudgetMs } from "../src/adapters/chatgpt-web/browser-worker";
 import { chatGptUnavailableProDetail } from "../src/adapters/chatgpt-web/browser-worker";
 import { chatGptStoppedThinkingError } from "../src/adapters/chatgpt-web/adapter-error";
 import { CHATGPT_STOPPED_THINKING_LABELS } from "../src/adapters/chatgpt-web/ui-labels";
@@ -1258,6 +1258,7 @@ test("large Markdown-rich context uses one plain-text editing command before exa
 
   await attachPrompt.call({
     activeComposer: async () => composer,
+    attachedPromptText: async () => "",
     insertPromptText,
     assertPromptAttached: async (_page: unknown, value: string) => { asserted = value; },
   }, dialogPage("").page, prompt, false);
@@ -1268,6 +1269,38 @@ test("large Markdown-rich context uses one plain-text editing command before exa
     ["evaluateOptions", { timeout: 20_000 }],
   ]);
   expect(asserted).toBe(prompt);
+});
+
+test("a restored non-connector draft is cleared before attaching the next prompt", async () => {
+  const previous = "Act as the model backend: " + "old".repeat(80_000);
+  const prompt = "Act as the model backend: " + "new".repeat(80_000);
+  let draft = previous;
+  let verifiedResets = 0;
+  let fillCalls = 0;
+  let insertCalls = 0;
+  const composer = {
+    // The browser can rehydrate a persisted Lexical draft after a Playwright fill("").
+    fill: async () => { fillCalls += 1; },
+    focus: async () => {},
+  };
+  const attachPrompt = (ChatGptBrowserWorker.prototype as unknown as {
+    attachPrompt(page: unknown, prompt: string, localTools: boolean): Promise<void>;
+  }).attachPrompt;
+
+  await attachPrompt.call({
+    activeComposer: async () => composer,
+    attachedPromptText: async () => draft,
+    clearChatGptComposerState: async () => { verifiedResets += 1; draft = ""; },
+    insertPromptText: async (_page: unknown, text: string) => { insertCalls += 1; draft += text; },
+    assertPromptAttached: async (_page: unknown, expected: string) => {
+      expect(draft).toBe(expected);
+    },
+  }, dialogPage("").page, prompt, false);
+
+  expect(verifiedResets).toBe(1);
+  expect(fillCalls).toBe(0);
+  expect(insertCalls).toBe(1);
+  expect(draft).toBe(prompt);
 });
 
 test("plain-text editing command fails closed when the focused composer rejects it", async () => {
@@ -2481,6 +2514,7 @@ test("Think attachment preserves the plugin on first and follow-up messages and 
     const submitted: boolean[] = [];
     const worker = {
       activeComposer: async () => ui.composer,
+      attachedPromptText: async () => ui.state.draft,
       selectConnector: async () => { connectorSelections += 1; ui.state.connectors = ["Codex Native2"]; return ui.composer; },
       insertPromptText: async () => { submitted.push(ui.state.pressed); },
       assertPromptAttached: async () => {}, clearChatGptComposerState: async () => { ui.state.draft = ""; ui.state.connectors = []; },
@@ -4122,12 +4156,51 @@ test("stale MCP progress stops suppressing DOM health without penalising long ac
     hoursIn + 1_000,
   )).toBeTrue();
 
+  // A completed tool can hand off to asynchronous native work. In particular, wait_agent is
+  // intentionally polled in bounded calls while the subagent completion notification can arrive
+  // later. Keep the most recent tool result live long enough that the browser DOM-health timeout
+  // does not beat the Responses bridge's own upstream-silence budget.
+  const completed = { ...outstanding, activeToolCalls: 0 };
+  expect(chatGptExternalProgressSuppressesDomHealth(
+    completed,
+    1_000 + CHATGPT_EXTERNAL_PROGRESS_RECENT_GRACE_MS - 1,
+  )).toBeTrue();
+  expect(chatGptExternalProgressSuppressesDomHealth(
+    completed,
+    1_000 + CHATGPT_EXTERNAL_PROGRESS_RECENT_GRACE_MS,
+  )).toBeFalse();
+
   // No recorded activity is never evidence.
   expect(chatGptExternalProgressSuppressesDomHealth(undefined, 1_000)).toBeFalse();
   expect(chatGptExternalProgressSuppressesDomHealth(
     { revision: 0, lastToolBatchRevision: 0, activeToolCalls: 0 },
     1_000,
   )).toBeFalse();
+});
+
+test("a delayed subagent notification does not lose a browser turn after the last wait result", () => {
+  // Reproduces the 2026-10-17 failure: the final 30s wait_agent poll returned normally, then the
+  // subagent completion notification arrived 127s later. The old 60s recent-progress window plus
+  // the 60s DOM-health grace expired just before that notification was delivered.
+  const lastToolResultAt = 1_000;
+  const notificationAt = lastToolResultAt + 127_000;
+  const progress = {
+    revision: 2,
+    lastToolBatchRevision: 1,
+    activeToolCalls: 0,
+    lastProgressAt: lastToolResultAt,
+  };
+  const externalProgressLive = chatGptExternalProgressSuppressesDomHealth(progress, notificationAt);
+  expect(externalProgressLive).toBeTrue();
+
+  const health = new ChatGptTurnDomHealthTracker(60_000, 10_000, 60_000);
+  expect(health.update({
+    responsePresent: true,
+    running: false,
+    currentText: "",
+    completionActionVisible: false,
+    externalProgressLive,
+  }, notificationAt)).toBeUndefined();
 });
 
 test("the daemon prefers the browser helper that shipped beside its own entrypoint", () => {

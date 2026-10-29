@@ -281,14 +281,14 @@ export async function settleActiveZeroRiskCompactionSource(
 export async function requestRetainedCompactionHandoff(
   worker: ChatGptBrowserWorker,
   parsed: CodexParsedRequest,
-  source: ChatGptTurnSession,
+  source: ChatGptTurnSession | string,
   broker: TurnBroker,
   capabilities: ChatGptWebCapabilities,
   traceId: string,
   signal?: AbortSignal,
   timeoutMs = MAX_COMPACTION_HANDOFF_TIMEOUT_MS,
 ): Promise<string> {
-  const conversationKey = source.conversationKey();
+  const conversationKey = typeof source === "string" ? source : source.conversationKey();
   if (!conversationKey) throw new Error("The completed ChatGPT source has no retained conversation identity");
   const operationTimeoutMs = boundedCompactionTimeout(timeoutMs);
   const deadline = new AbortController();
@@ -316,8 +316,13 @@ export async function requestRetainedCompactionHandoff(
     transaction = await withCompactionAbort(transactionPromise, operationSignal);
     const instruction = structuredCompactionHandoffInstruction(transaction, worker.appName);
     const prepare = async () => ({ text: instruction, images: [], release: () => {} });
+    // Reconnecting observers share the stable logical compaction trace, but each failed completed
+    // checkpoint was already submitted to the saved ChatGPT conversation. Give every one-shot
+    // handoff attempt its own physical browser trace so an explicit retry does not trip the
+    // Launcher's duplicate-send protection for the previous, already-settled checkpoint message.
+    const browserTraceId = `${traceId}_${transaction.handoffId.slice("handoff_".length, "handoff_".length + 12)}`;
     browser = worker.run({
-      traceId,
+      traceId: browserTraceId,
       modelId: parsed.modelId,
       reasoning: parsed.options.reasoning,
       ...(parsed._chatgptModelFamily ? { modelFamily: parsed._chatgptModelFamily } : {}),
@@ -328,6 +333,9 @@ export async function requestRetainedCompactionHandoff(
       prepare,
       prepareResume: prepare,
       conversationKey,
+      // Keep this exact tab after an accepted checkpoint. The next native turn will resume
+      // from its existing transcript, even though Codex has replaced its own context.
+      retainConversation: true,
       requireRetainedConversation: true,
       compaction: true,
       abortSignal: browserAbort.signal,

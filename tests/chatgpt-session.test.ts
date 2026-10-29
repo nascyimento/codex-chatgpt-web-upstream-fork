@@ -2,12 +2,14 @@ import { expect, test } from "bun:test";
 import { ChatGptBrowserWorker } from "../src/adapters/chatgpt-web/browser-worker";
 import {
   CHATGPT_COMPOSER_SELECTOR,
+  CHATGPT_USER_TURN_SELECTOR,
   CHATGPT_EFFORT_CONTROL_SELECTOR,
   CHATGPT_EFFORT_MENU_SELECTOR,
   CHATGPT_EFFORT_SLIDER_CONTAINER_SELECTOR,
   activateChatGptEffortMenu,
   assertNewChatPage,
   CHATGPT_NEW_CHAT_URL,
+  chatGptSavedConversationUrl,
   detectChatGptAccountCapabilities,
 } from "../src/chatgpt-session";
 
@@ -32,6 +34,91 @@ test("new chats are always ordinary and reject a previous conversation or Tempor
       await expect(assertNewChatPage(page)).rejects.toThrow("requested new chat");
     }
   }
+});
+
+test("saved conversation recovery verifies the URL and an existing user turn before continuing", async () => {
+  const url = "https://chatgpt.com/c/00000000-0000-4000-8000-000000000001";
+  expect(chatGptSavedConversationUrl(`${url}#answer`)).toBe(url);
+  expect(chatGptSavedConversationUrl(`${url}?temporary-chat=true`)).toBeUndefined();
+  expect(chatGptSavedConversationUrl("https://example.com/c/00000000-0000-4000-8000-000000000001")).toBeUndefined();
+  const recover = (ChatGptBrowserWorker.prototype as any).prepareExistingChatSurface;
+  for (const target of [url, "https://chatgpt.com/"]) {
+    let currentUrl = "about:blank";
+    let foundUser = 0;
+    const absent: any = { filter: () => absent, last: () => absent, isVisible: async () => false };
+    const composer: any = { count: async () => 1, nth: () => composer, isVisible: async () => true };
+    const user: any = { first: () => user, waitFor: async () => { foundUser += 1; } };
+    const page: any = {
+      url: () => currentUrl,
+      goto: async () => { currentUrl = target; },
+      locator: (selector: string) => selector === CHATGPT_COMPOSER_SELECTOR ? composer
+        : selector === CHATGPT_USER_TURN_SELECTOR ? user : absent,
+    };
+    if (target === url) {
+      expect(await recover.call({ activeComposer: async () => composer }, page, url)).toBe(composer);
+      expect(foundUser).toBe(1);
+    } else {
+      await expect(recover.call({ activeComposer: async () => composer }, page, url))
+        .rejects.toThrow("redirected away");
+      expect(foundUser).toBe(0);
+    }
+  }
+});
+
+test("saved conversation recovery does not classify a composer remount as authentication failure", async () => {
+  const url = "https://chatgpt.com/c/00000000-0000-4000-8000-000000000001";
+  const recover = (ChatGptBrowserWorker.prototype as any).prepareExistingChatSurface;
+  let currentUrl = "about:blank";
+  let foundUser = 0;
+  const absent: any = {
+    filter: () => absent,
+    last: () => absent,
+    isVisible: async () => false,
+    count: async () => 0,
+  };
+  const composer: any = {};
+  const user: any = { first: () => user, waitFor: async () => { foundUser += 1; } };
+  const page: any = {
+    url: () => currentUrl,
+    goto: async () => { currentUrl = url; },
+    locator: (selector: string) => selector === CHATGPT_USER_TURN_SELECTOR ? user : absent,
+  };
+
+  // activeComposer observed a ready editor, then the SPA remounted it before the next statement.
+  // BrowserHost owns actual auth-session verification, so this transient surface change must not
+  // be re-labelled as a sign-out.
+  expect(await recover.call({ activeComposer: async () => composer }, page, url)).toBe(composer);
+  expect(foundUser).toBe(1);
+});
+
+test("recovered saved conversations wait for an already-running turn before continuing", async () => {
+  const waitForIdle = (ChatGptBrowserWorker.prototype as any).waitForRecoveredConversationIdle;
+  let stopChecks = 0;
+  let heartbeats = 0;
+  let generationProgress = 0;
+  const checkpoints: string[] = [];
+  const stop: any = {
+    filter: () => stop,
+    last: () => stop,
+    isVisible: async () => stopChecks++ === 0,
+  };
+  const absent: any = { filter: () => absent, last: () => absent, isVisible: async () => false };
+  const page: any = {
+    locator: (selector: string) => selector.includes("stop-button") ? stop : absent,
+  };
+
+  await waitForIdle.call({}, page, {
+    onHeartbeat: () => { heartbeats += 1; },
+    onGenerationProgress: () => { generationProgress += 1; },
+  }, async (checkpoint: string) => { checkpoints.push(checkpoint); });
+
+  expect(stopChecks).toBe(3);
+  expect(heartbeats).toBe(1);
+  expect(generationProgress).toBe(1);
+  expect(checkpoints).toEqual([
+    "saved-conversation-active-turn-detected",
+    "saved-conversation-active-turn-settled",
+  ]);
 });
 
 test("composer and effort selectors exclude unrelated editable fields and menu buttons", () => {

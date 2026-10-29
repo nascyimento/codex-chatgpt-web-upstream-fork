@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { isChatGptWebZeroRiskBackendModel } from "../../chatgpt-web-models";
 import { defaultBrokerEndpoint, expandUserPath, resolveBrokerEndpoint } from "../../config";
@@ -46,6 +47,7 @@ import {
   settleActiveZeroRiskCompactionSource,
 } from "./compaction-handoff";
 import {
+  chatGptCompactionEpoch,
   chatGptConversationKey,
   retainedConversationResumeRequest,
 } from "./conversation-key";
@@ -204,19 +206,22 @@ function safeManualTerminalError(status: "cancelled" | "failed"): ChatGptWebAdap
 export function chatGptWebExecutionNamespace(provider: CodexProviderConfig): string {
   return createHash("sha256").update(JSON.stringify({
     baseUrl: provider.baseUrl,
-    chatgptWeb: provider.chatgptWeb ?? {},
   })).digest("hex");
 }
 
 export function chatGptWebTraceId(provider: CodexProviderConfig, parsed: CodexParsedRequest): string {
   const namespace = chatGptWebExecutionNamespace(provider);
   // The logical response key survives compaction so a final answer that won the handoff race
-  // can still be replayed. A new physical browser owner must instead belong to the new context
-  // epoch; otherwise Zero Risk correctly rejects it against the previous owner's completion.
+  // can still be replayed. Zero Risk instead needs an epoch-bound physical trace after a
+  // manual checkpoint: it creates a fresh owner even when the native instruction is unchanged.
   const conversation = parsed._compactionRequest ? undefined : chatGptConversationKey(parsed, namespace);
+  const manualEpoch = isChatGptWebZeroRiskBackendModel(parsed.modelId)
+    ? chatGptCompactionEpoch(parsed)
+    : null;
   return createHash("sha256")
     .update(`${namespace}:${chatGptTurnExecutionKey(parsed)}`)
     .update(conversation ? `:${conversation}` : "")
+    .update(manualEpoch ? `:${JSON.stringify(manualEpoch)}` : "")
     .digest("hex")
     .slice(0, 12);
 }
@@ -1018,8 +1023,22 @@ export function createChatGptWebAdapter(
                   armHandoffDeadline();
                   const operationSignal = AbortSignal.any([operatorSignal, handoffDeadline.signal]);
                   const sourceConversationKey = chatGptConversationKey(parsed, executionNamespace);
+                  const retainedConversationEnabled = Boolean(
+                    sourceConversationKey
+                    && retainedLauncherDescriptor
+                    && provider.chatgptWeb?.localToolsEnabled === true
+                    && !freshConversationPerTurn
+                    && !manualRequest,
+                  );
                   const runFreshCompaction = async (reason: string): Promise<string> => {
                     handoffPhase = "fresh_compaction";
+                    if (retainedConversationEnabled) {
+                      throw new ChatGptWebAdapterError(
+                        "The original saved ChatGPT conversation could not be used for this Codex compaction. Resume the original turn before compacting; a replacement chat will not be created.",
+                        { status: 409, errorType: "invalid_request_error",
+                          code: "retained_conversation_unavailable", retryable: false },
+                      );
+                    }
                     if (freshConversationPerTurn) console.info("[chatgpt-web] compaction uses configured fresh conversation mode");
                     else console.warn(`[chatgpt-web] retained compaction fallback=${reason}`);
                     // Fresh compaction is a bounded phase. Each exact multipart acknowledgement
@@ -1048,6 +1067,7 @@ export function createChatGptWebAdapter(
                   let source: ChatGptTurnSession | undefined;
                   let stopSourceProgress: (() => void) | undefined;
                   let preserveFinalResponse = false;
+                  let retainedHandoffSucceeded = false;
                   try {
                     if (freshConversationPerTurn) {
                       // Full native history is the compaction input. Release an unfinished
@@ -1077,6 +1097,36 @@ export function createChatGptWebAdapter(
                       && source?.settledOutcome()?.type === "final";
                     const retainedKey = source?.conversationKey();
                     if (!source || !retainedKey) {
+                      // The in-memory session and Launcher tab share the same bounded TTL, but a
+                      // saved-chat mapping intentionally outlives both. A late native compaction
+                      // must therefore reopen the exact persisted ChatGPT conversation rather
+                      // than treating cache expiry as loss of the source transcript. The Launcher
+                      // remains fail-closed here: `requireRetainedConversation` only leases a new
+                      // tab when this conversationKey still has a verified bound mapping, and it
+                      // rejects missing/pending/ambiguous mappings without creating another chat.
+                      if (retainedConversationEnabled) {
+                        handoffPhase = "recovered_saved_checkpoint";
+                        armHandoffDeadline();
+                        const rawSummary = await requestRetainedCompactionHandoff(
+                          worker,
+                          parsed,
+                          sourceConversationKey!,
+                          structuredBroker!,
+                          configuredCapabilities,
+                          handoffTraceId,
+                          operationSignal,
+                          handoffTimeoutMs,
+                        );
+                        return canonicalizeCompactionHandoff(parsed, rawSummary);
+                      }
+                      // An old Launcher tab can outlive an in-memory source after a daemon
+                      // restart. A fresh checkpoint must not leave that tab masquerading as
+                      // the exact transcript that produced the new compacted context.
+                      if (!retainedConversationEnabled
+                        && sourceConversationKey && retainedLauncherDescriptor
+                        && existsSync(retainedLauncherDescriptor)) {
+                        await releaseLauncherRetainedConversation(retainedLauncherDescriptor, sourceConversationKey);
+                      }
                       return await runFreshCompaction("source_unavailable_before_handoff");
                     }
                     // Renew only for observed source activity, never an idle helper heartbeat.
@@ -1126,6 +1176,7 @@ export function createChatGptWebAdapter(
                         operationSignal,
                         handoffTimeoutMs,
                       );
+                      retainedHandoffSucceeded = true;
                     } else {
                       if (source.isActive()) {
                         const outcome = await withAbort(source.browserOutcome, operationSignal);
@@ -1146,6 +1197,7 @@ export function createChatGptWebAdapter(
                         operationSignal,
                         handoffTimeoutMs,
                       );
+                      retainedHandoffSucceeded = true;
                     }
                     const summary = canonicalizeCompactionHandoff(parsed, rawSummary);
                     await withAbort(
@@ -1154,8 +1206,9 @@ export function createChatGptWebAdapter(
                           retainedKey,
                           source,
                           compactedSourceExecutionKey,
+                          retainedHandoffSucceeded,
                         )
-                        : chatGptTurnSessions.retireConversationAndWait(retainedKey),
+                        : chatGptTurnSessions.retireConversationAndWait(retainedKey, retainedHandoffSucceeded),
                       operationSignal,
                     );
                     return summary;
@@ -1163,6 +1216,18 @@ export function createChatGptWebAdapter(
                     const retainedKey = source?.conversationKey();
                     if (!retainedKey) throw error;
                     let handoffError = error instanceof Error ? error : new Error(String(error));
+                    // A retained checkpoint can settle as an ordinary assistant response when
+                    // ChatGPT declines or misses the one-shot control call. That failure is
+                    // retryable by the operator against the same saved conversation: releasing
+                    // the retained source here destroys the only exact transcript a retry can
+                    // safely use and turns the next attempt into retained_conversation_unavailable.
+                    // Keep both the logical source and its retained browser binding until a later
+                    // checkpoint succeeds (or an explicit cancellation/source failure retires it).
+                    if (handoffError instanceof ChatGptWebAdapterError
+                      && (handoffError.code === "compaction_handoff_missing"
+                        || (retainedConversationEnabled && handoffError.code === "compaction_source_unavailable"))) {
+                      throw handoffError;
+                    }
                     try {
                       // Operator cancellation ends the logical compaction, but cancel-all must not
                       // acknowledge until the retained browser/helper owner has physically retired.
@@ -1181,6 +1246,7 @@ export function createChatGptWebAdapter(
                     }
                     if (handoffError instanceof ChatGptWebAdapterError
                       && handoffError.code === "compaction_source_unavailable") {
+                      if (retainedConversationEnabled) throw handoffError;
                       return await runFreshCompaction("source_disappeared_before_handoff");
                     }
                     throw handoffError;
