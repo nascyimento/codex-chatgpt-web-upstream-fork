@@ -1,3 +1,4 @@
+import { CHATGPT_USER_TURN_SELECTOR } from "../src/chatgpt-ui/turns";
 import { expect, test } from "bun:test";
 import { ChatGptBrowserWorker } from "../src/adapters/chatgpt-web/browser-worker";
 import { CHATGPT_COMPOSER_SELECTOR } from "../src/chatgpt-ui/composer";

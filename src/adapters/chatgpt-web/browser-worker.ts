@@ -2404,13 +2404,14 @@ export class ChatGptBrowserWorker {
     page: Page,
     captureDiagnostic?: (checkpoint: string) => Promise<void>,
     abortSignal?: AbortSignal,
+    useTemporaryChats = this.config.useTemporaryChats,
   ): Promise<Locator> {
     throwIfPromptAttachmentAborted(abortSignal);
     // Launcher verification refreshes its owned page before attaching Playwright so a newly added
     // connector is present in the catalog. Navigating again here destroys that freshly hydrated
     // document and made the first verification race a second SPA bootstrap. A leased turn starts on
     // about:blank and therefore still performs exactly one navigation through this same method.
-    const targetUrl = chatGptNewChatUrl(this.config.useTemporaryChats);
+    const targetUrl = chatGptNewChatUrl(useTemporaryChats);
     if (page.url() !== targetUrl) {
       await withBrowserTurnAbort(page.goto(targetUrl, {
         waitUntil: "domcontentloaded",
@@ -2425,7 +2426,7 @@ export class ChatGptBrowserWorker {
     await captureDiagnostic?.("composer-ready");
     await throwIfChatGptSessionFailureAlert(page);
     await assertAuthenticatedChatGptPage(page);
-    await assertNewChatPage(page, this.config.useTemporaryChats);
+    await assertNewChatPage(page, useTemporaryChats);
     await captureDiagnostic?.("session-verified");
     return composer;
   }
@@ -4809,7 +4810,6 @@ export class ChatGptBrowserWorker {
           await turn.onSubmitted?.();
         },
       }, surfaceId, undefined, reused, lease.trackUsage === true, transactionId, {
-
         recoveredUrl: lease.recoveredUrl,
         conversationUrl: lease.conversationUrl,
         accountKey: lease.accountKey,
@@ -5112,6 +5112,7 @@ export class ChatGptBrowserWorker {
             page,
             checkpoint => diagnostics.capture(page, checkpoint),
             turn.abortSignal,
+            turn.conversationKey ? false : this.config.useTemporaryChats,
           ),
         );
       }
@@ -5389,6 +5390,7 @@ export class ChatGptBrowserWorker {
                 page,
                 checkpoint => diagnostics.capture(page, checkpoint),
                 turn.abortSignal,
+                turn.conversationKey ? false : this.config.useTemporaryChats,
               );
               mode = await this.selectModelAndEffort(
                 page,
