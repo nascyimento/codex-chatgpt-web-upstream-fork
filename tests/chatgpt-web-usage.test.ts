@@ -242,7 +242,8 @@ test("#1001 keeps a fitting GPT-6 Plus code transcript inline across planning an
   const selected = compileBiggerContextPrompt(parsed, caps, token, { multipartTransactionId: id });
   expect(selected).toEqual(inline);
   expect(checkChatGptWebTransport(selected, parsed.modelId, mode, caps, "6", id).estimatedInputTokens).toBe(inlineTokens);
-  expect(() => checkChatGptWebTransport(staged, parsed.modelId, mode, caps, "6", id)).toThrow("120,000-token");
+  // The fork's 260k Plus window also admits the larger two-part form; the smaller inline one still wins.
+  expect(checkChatGptWebTransport(staged, parsed.modelId, mode, caps, "6", id).estimatedInputTokens).toBeGreaterThan(inlineTokens);
   expect(estimateChatGptWebUsage(parsed, {}, caps, true).inputTokens).toBe(inlineTokens);
 }, 30_000);
 
@@ -250,19 +251,19 @@ test("Bigger Context refuses an oversized ordinary GPT-6 Plus transcript before 
   const caps = { ...capabilities, proAvailable: false };
   const parsed = request("");
   parsed._chatgptModelFamily = "6";
-  parsed.context.messages = Array.from({ length: 12 }, (_, i) => ({
+  parsed.context.messages = Array.from({ length: 24 }, (_, i) => ({
     role: "user", timestamp: i, content: "sample ".repeat(11_000),
   }));
   const id = "ctx_b6088f32f1ca497eb6b50dfcab1abaca";
   expect(() => compileBiggerContextPrompt(parsed, caps, undefined, { multipartTransactionId: id }))
-    .toThrow("120,000-token six-part ceiling");
+    .toThrow("260,000-token six-part ceiling");
   const compiled = compileChatGptWebPrompt(parsed, caps, undefined, { experimentalMultipartParts: 6, multipartTransactionId: id });
-  expect(estimateChatGptWebUsage(parsed, {}, caps, true).inputTokens).toBeGreaterThan(120_000);
+  expect(estimateChatGptWebUsage(parsed, {}, caps, true).inputTokens).toBeGreaterThan(260_000);
   expect(compiled.multipart?.parts.length).toBe(6);
   expect(compiled.multipart!.parts.flatMap(part => JSON.parse(part).records).map(record => record.message.content))
     .toEqual(parsed.context.messages.map(message => message.content));
   const mode = resolveChatGptWebModelMode(parsed.modelId, "high", caps);
-  expect(() => checkChatGptWebTransport(compiled, parsed.modelId, mode, caps, "6", id)).toThrow("120,000-token six-part ceiling");
+  expect(() => checkChatGptWebTransport(compiled, parsed.modelId, mode, caps, "6", id)).toThrow("260,000-token six-part ceiling");
   parsed._compactionRequest = true;
   const compact = compileBiggerContextPrompt(parsed, caps, undefined, { multipartTransactionId: id });
   expect(compact.multipart?.parts.length).toBe(6);
@@ -275,11 +276,11 @@ test("the selected multipart transaction ID counts toward the GPT-6 Plus ceiling
   const caps = { ...capabilities, proAvailable: false, extraHighAvailable: false };
   const parsed = request("");
   parsed._chatgptModelFamily = "6";
-  parsed.context.messages = [28_000, 28_000, 28_000, 26_265].map((words, timestamp) =>
+  parsed.context.messages = [58_000, 58_000, 58_000, 76_118].map((words, timestamp) =>
     ({ role: "user", timestamp, content: "test ".repeat(words) }));
   const id = "ctx_b6088f32f1ca497eb6b50dfcab1abaca";
   const candidate = compileChatGptWebPrompt(parsed, caps, undefined, { experimentalMultipartParts: 2, multipartTransactionId: id });
-  expect(estimateCompiledChatGptWebInputTokens(candidate, parsed.modelId)).toBeLessThan(120_000);
-  expect(estimateCompiledChatGptWebInputTokens(candidate, parsed.modelId, id)).toBeGreaterThanOrEqual(120_000);
-  expect(() => compileBiggerContextPrompt(parsed, caps, undefined, { multipartTransactionId: id })).toThrow("120,000-token six-part ceiling");
+  expect(estimateCompiledChatGptWebInputTokens(candidate, parsed.modelId)).toBeLessThan(260_000);
+  expect(estimateCompiledChatGptWebInputTokens(candidate, parsed.modelId, id)).toBeGreaterThanOrEqual(260_000);
+  expect(() => compileBiggerContextPrompt(parsed, caps, undefined, { multipartTransactionId: id })).toThrow("260,000-token six-part ceiling");
 }, 30_000);
